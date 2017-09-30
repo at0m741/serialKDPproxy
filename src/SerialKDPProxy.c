@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netdb.h>
 #include <poll.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #include <arpa/inet.h>
 #include <termios.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "kdp_serial.h"
 #include "ip_sum.h"
@@ -263,13 +265,30 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "Opening %s\n", device_name);
 
+    int is_socket = 0;
+
     g_ser = open(device_name, O_RDWR | O_NONBLOCK | O_NOCTTY);
     if (-1 == g_ser) {
-        fprintf(stderr, "Failed to open serial\n");
-        return 1;
+        if(EOPNOTSUPP == errno) {
+            struct sockaddr_un addr;
+            memset(&addr, 0, sizeof(addr));
+            addr.sun_family = AF_UNIX;
+            strlcpy(addr.sun_path, device_name, sizeof(addr.sun_path));
+            g_ser = socket(AF_UNIX, SOCK_STREAM, 0);
+            if(-1 == connect(g_ser, (struct sockaddr *)&addr, sizeof(addr))) {
+                perror("Failed to open serial");
+                return 1;
+            }
+            is_socket = 1;
+        } else {
+            perror("Failed to open serial");
+            return 1;
+        }
     }
 
-    set_termopts(g_ser);
+    if(!is_socket)
+        set_termopts(g_ser);
+
     fprintf(stderr, "Waiting for packets, pid=%lu\n", (long unsigned)getpid());
 
     struct pollfd pollfds[3] = {
